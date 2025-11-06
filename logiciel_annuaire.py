@@ -38,9 +38,6 @@ const AnnuaireDynamique = () => {
     if (type === 'jalixe') setJalixeData(data);
 
     setLoading(false);
-    if (annuaireData.length && gestcomData.length && jalixeData.length) {
-      setLastUpdate(new Date());
-    }
   };
 
   const mergedData = useMemo(() => {
@@ -130,25 +127,17 @@ const AnnuaireDynamique = () => {
     setFilters(prev => ({...prev, [column]: value}));
   };
 
-  const clearFilter = (column) => {
-    setFilters(prev => {
-      const newFilters = { ...prev };
-      delete newFilters[column];
-      return newFilters;
-    });
-  };
-
   const exportToExcel = () => {
     const headers = ['Nom', 'CT_Num', 'Adresse', 'CP', 'Ville', 'Pays', 'Telephone', 'Email', 'Titres'];
     const csvContent = [
       headers.join(';'),
-      ...filteredData.map(row => headers.map(h => `"${row[h] || '"}"`).join(';'))
+      ...filteredData.map(row => headers.map(h => '"' + (row[h] || '') + '"').join(';'))
     ].join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `annuaire_export_${new Date().toISOString().slice(0,10)}.csv`;
+    link.download = 'annuaire_export_' + new Date().toISOString().slice(0,10) + '.csv';
     link.click();
   };
 
@@ -169,6 +158,11 @@ const AnnuaireDynamique = () => {
                 <label className="flex flex-col items-center cursor-pointer">
                   <Upload className="w-8 h-8 text-blue-500 mb-2" />
                   <span className="text-sm font-medium">{type.toUpperCase()}.csv</span>
+                  <span className="text-xs text-gray-500 mt-1">
+                    {type === 'annuaire' && annuaireData.length > 0 && '✅ ' + annuaireData.length + ' clients'}
+                    {type === 'gestcom' && gestcomData.length > 0 && '✅ ' + gestcomData.length + ' lignes'}
+                    {type === 'jalixe' && jalixeData.length > 0 && '✅ ' + jalixeData.length + ' notes'}
+                  </span>
                   <input type="file" accept=".csv" className="hidden" onChange={(e) => handleFileUpload(e, type)} />
                 </label>
               </div>
@@ -178,18 +172,20 @@ const AnnuaireDynamique = () => {
           {diagnostics && (
             <div className="bg-blue-50 p-4 rounded mb-4">
               <h3 className="font-bold mb-2">🔍 Diagnostic</h3>
-              <div className="text-sm">
-                <div>GESTCOM avec note: {diagnostics.gestcomWithNote}</div>
-                <div>Correspondances: {diagnostics.matchesFound}</div>
+              <div className="text-sm grid grid-cols-2 gap-2">
+                <div>GESTCOM total: <b>{diagnostics.totalGestcom}</b></div>
+                <div>Avec note: <b className="text-green-600">{diagnostics.gestcomWithNote}</b></div>
+                <div>Phases trouvées: <b>{diagnostics.phaseNumbers}</b></div>
+                <div>Correspondances: <b className="text-blue-600">{diagnostics.matchesFound}</b></div>
               </div>
             </div>
           )}
 
           {mergedData.length > 0 && (
-            <div className="flex justify-between mb-4">
-              <span>{filteredData.length} clients</span>
-              <button onClick={exportToExcel} className="px-4 py-2 bg-green-600 text-white rounded">
-                <Download className="inline w-4 h-4 mr-2" />Exporter
+            <div className="flex justify-between items-center mb-4 p-3 bg-green-50 rounded">
+              <span className="font-medium">{filteredData.length} clients affichés / {mergedData.length} total</span>
+              <button onClick={exportToExcel} className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">
+                <Download className="inline w-4 h-4 mr-2" />Exporter Excel
               </button>
             </div>
           )}
@@ -199,22 +195,32 @@ const AnnuaireDynamique = () => {
           <div className="bg-white rounded-lg shadow-xl overflow-x-auto">
             <table className="w-full">
               <thead className="bg-blue-600 text-white">
-                <tr>{columns.map(col => <th key={col} className="px-4 py-3 text-left">{col}</th>)}</tr>
+                <tr>{columns.map(col => <th key={col} className="px-4 py-3 text-left text-sm font-semibold">{col}</th>)}</tr>
                 <tr className="bg-blue-50">
                   {columns.map(col => (
                     <th key={col} className="px-4 py-2">
-                      <input type="text" placeholder="Filtrer..." value={filters[col] || ''} 
+                      <input 
+                        type="text" 
+                        placeholder="Filtrer..." 
+                        value={filters[col] || ''} 
                         onChange={(e) => handleFilterChange(col, e.target.value)}
-                        className="w-full px-2 py-1 border rounded text-sm" />
+                        className="w-full px-2 py-1 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                      />
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {filteredData.map((row, idx) => (
-                  <tr key={idx} className="hover:bg-blue-50">
+                  <tr key={idx} className="hover:bg-blue-50 border-b">
                     {columns.map(col => (
-                      <td key={col} className="px-4 py-3 text-sm">{row[col]}</td>
+                      <td key={col} className="px-4 py-3 text-sm">
+                        {col === 'Titres' && row[col] === 'Aucun titre' ? (
+                          <span className="text-red-500 italic">{row[col]}</span>
+                        ) : (
+                          row[col]
+                        )}
+                      </td>
                     ))}
                   </tr>
                 ))}
@@ -232,3 +238,4 @@ const AnnuaireDynamique = () => {
 };
 
 export default AnnuaireDynamique;
+
