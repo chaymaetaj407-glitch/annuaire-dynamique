@@ -29,10 +29,11 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
             st.error("❌ Colonnes CT_Num ou DL_Design manquantes.")
             return None
 
-        # === Nettoyage CT_Num et Phase ===
+        # === Nettoyage des CT_Num et des phases ===
         df_annuaire['CT_Num_Clean'] = df_annuaire[ct_col_annuaire].astype(str).str.strip().str.upper()
         df_gestcom['CT_Num_Clean'] = df_gestcom[ct_col_gestcom].astype(str).str.strip().str.upper()
 
+        # Filtrer sur AR_Ref = NOTE
         if ar_ref_col in df_gestcom.columns:
             df_gestcom = df_gestcom[df_gestcom[ar_ref_col].astype(str).str.upper().str.contains("NOTE", na=False)]
 
@@ -54,7 +55,7 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
             .str.upper()
         )
 
-        # === Fusion exacte d’abord ===
+        # === Fusion exacte (Phase_Num == CptPhase_Clean) ===
         df_joint = df_gestcom.merge(
             df_jalixe[['CptPhase_Clean', 'LibTitre']],
             left_on='Phase_Num',
@@ -62,7 +63,7 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
             how='left'
         )
 
-        # === Recherche fuzzy uniquement pour les phases non trouvées ===
+        # === Fuzzy match uniquement pour les phases non trouvées ===
         df_sans_titre = df_joint[df_joint['LibTitre'].isna()].copy()
         df_avec_titre = df_joint.dropna(subset=['LibTitre']).copy()
 
@@ -78,6 +79,11 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
                     mapping[phase] = match[0]
 
             df_sans_titre['Phase_Matched'] = df_sans_titre['Phase_Num'].map(mapping)
+
+            # ✅ Correction du bug de type (float ↔ str)
+            df_sans_titre['Phase_Matched'] = df_sans_titre['Phase_Matched'].astype(str)
+            df_jalixe['CptPhase_Clean'] = df_jalixe['CptPhase_Clean'].astype(str)
+
             df_sans_titre = df_sans_titre.merge(
                 df_jalixe[['CptPhase_Clean', 'LibTitre']],
                 left_on='Phase_Matched',
@@ -87,11 +93,11 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
 
             df_joint = pd.concat([df_avec_titre, df_sans_titre], ignore_index=True)
 
-        # === Supprimer doublons et lignes vides ===
+        # === Nettoyage final et suppression des doublons ===
         df_joint = df_joint[df_joint['LibTitre'].notna()]
         df_joint.drop_duplicates(subset=['CT_Num_Clean', 'LibTitre'], inplace=True)
 
-        # === Fusion directe : 1 ligne = 1 client = 1 titre ===
+        # === Fusion avec Annuaire pour obtenir infos client ===
         df_final = df_joint.merge(
             df_annuaire,
             on='CT_Num_Clean',
@@ -99,17 +105,18 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
             suffixes=('', '_annuaire')
         )
 
-        # === Nettoyage final ===
+        # === Sélection des colonnes finales ===
         colonnes_finales = [
             'CT_Num_Clean', ct_col_annuaire, 'LibTitre',
             'CT_Intitule' if 'CT_Intitule' in df_final.columns else None,
             'CT_Adresse' if 'CT_Adresse' in df_final.columns else None,
             'CT_CodePostal' if 'CT_CodePostal' in df_final.columns else None,
             'CT_Ville' if 'CT_Ville' in df_final.columns else None,
-            'CT_Pays' if 'CT_Pays' in df_final.columns else None
+            'CT_Pays' if 'CT_Pays' in df_final.columns else None,
+            'CT_Telephone' if 'CT_Telephone' in df_final.columns else None,
+            'CT_Email' if 'CT_Email' in df_final.columns else None
         ]
         colonnes_finales = [c for c in colonnes_finales if c]
-
         df_final = df_final[colonnes_finales].drop_duplicates().reset_index(drop=True)
         df_final.rename(columns={'LibTitre': 'Titre'}, inplace=True)
 
@@ -124,7 +131,7 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
         return None
 
 
-# === INTERFACE ===
+# === INTERFACE STREAMLIT ===
 st.sidebar.header("📂 Charger vos fichiers")
 file_annuaire = st.sidebar.file_uploader("1️⃣ Annuaire", type=["xlsx", "csv"])
 file_gestcom = st.sidebar.file_uploader("2️⃣ GESTCOM", type=["xlsx", "csv"])
