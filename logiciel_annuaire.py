@@ -3,7 +3,6 @@ import pandas as pd
 from datetime import datetime
 import io
 
-# Installation automatique d'openpyxl si nécessaire
 try:
     import openpyxl
 except ImportError:
@@ -11,7 +10,6 @@ except ImportError:
     import sys
     subprocess.check_call([sys.executable, "-m", "pip", "install", "openpyxl"])
 
-# Configuration de la page
 st.set_page_config(
     page_title="Annuaire Dynamique - France Routage", 
     layout="wide",
@@ -20,19 +18,12 @@ st.set_page_config(
 
 st.title("📘 Annuaire Dynamique - France Routage")
 
-# Fonction optimisée pour traiter les données
 @st.cache_data
 def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
-    """
-    Traite et fusionne les 3 bases de données selon les règles métier
-    VERSION SANS MÉLANGE : Déduplique CptPhase dans JALIXE
-    """
     try:
-        # 1. COMPTAGE INITIAL
         nb_clients_annuaire = len(df_annuaire)
-        st.info(f"📊 **{nb_clients_annuaire}** clients dans l'Annuaire")
+        st.info(f"📊 {nb_clients_annuaire} clients dans l'Annuaire")
         
-        # 2. IDENTIFIER CT_Num dans ANNUAIRE
         ct_col_annuaire = None
         for col in df_annuaire.columns:
             if col in ['CT_Num', 'ct_num', 'num_ct', 'CT_NUM']:
@@ -40,44 +31,61 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
                 break
         
         if not ct_col_annuaire:
-            st.error("❌ Colonne CT_Num introuvable dans Annuaire")
+            st.error("❌ CT_Num introuvable dans Annuaire")
             return None
         
-        # 3. IDENTIFIER CT_Intitule dans ANNUAIRE
         intitule_col_annuaire = None
         for col in df_annuaire.columns:
             if col in ['CT_Intitule', 'CT_INTITULE', 'ct_intitule']:
                 intitule_col_annuaire = col
                 break
         
-        # 4. FILTRE STRICT : AR_Ref = "NOTE"
+        if not intitule_col_annuaire:
+            st.error("❌ CT_Intitule introuvable dans Annuaire")
+            return None
+        
+        df_annuaire['CLE_UNIQUE'] = (
+            df_annuaire[ct_col_annuaire].astype(str).str.strip().str.upper() + 
+            '|||' + 
+            df_annuaire[intitule_col_annuaire].astype(str).str.strip().str.upper()
+        )
+        
+        nb_doublons_annuaire = df_annuaire['CLE_UNIQUE'].duplicated().sum()
+        if nb_doublons_annuaire > 0:
+            st.warning(f"⚠️ {nb_doublons_annuaire} doublons dans Annuaire")
+            df_annuaire = df_annuaire.drop_duplicates(subset=['CLE_UNIQUE'], keep='first')
+            st.info(f"→ {len(df_annuaire)} lignes uniques gardées")
+        
         if 'AR_Ref' in df_gestcom.columns:
             df_gestcom_filtre = df_gestcom[df_gestcom['AR_Ref'].astype(str).str.strip().str.upper() == 'NOTE'].copy()
         elif 'AR_REF' in df_gestcom.columns:
             df_gestcom_filtre = df_gestcom[df_gestcom['AR_REF'].astype(str).str.strip().str.upper() == 'NOTE'].copy()
         else:
-            st.warning("⚠️ Colonne AR_Ref introuvable")
+            st.warning("⚠️ AR_Ref introuvable")
             df_gestcom_filtre = df_gestcom.copy()
         
         nb_notes = len(df_gestcom_filtre)
-        st.info(f"🔍 **{nb_notes}** lignes avec AR_Ref='NOTE'")
+        st.info(f"🔍 {nb_notes} lignes NOTE dans GESTCOM")
         
         if nb_notes == 0:
-            st.warning("⚠️ Aucune ligne NOTE trouvée")
+            st.warning("Aucune ligne NOTE trouvée")
         
-        # 5. IDENTIFIER COLONNES GESTCOM
         if 'DL_Design' in df_gestcom_filtre.columns:
             phase_col = 'DL_Design'
         elif 'DL_DESIGN' in df_gestcom_filtre.columns:
             phase_col = 'DL_DESIGN'
         else:
-            st.error("❌ Colonne DL_DESIGN introuvable")
+            st.error("❌ DL_DESIGN introuvable")
             return None
         
-        # 6. EXTRAIRE NUMÉRO DE PHASE
-        df_gestcom_filtre['Phase_Num'] = df_gestcom_filtre[phase_col].astype(str).str.replace('{note}', '', case=False).str.replace('{NOTE}', '', case=False).str.strip()
+        df_gestcom_filtre['Phase_Num'] = (
+            df_gestcom_filtre[phase_col]
+            .astype(str)
+            .str.replace('{note}', '', case=False)
+            .str.replace('{NOTE}', '', case=False)
+            .str.strip()
+        )
         
-        # 7. IDENTIFIER CT_Num dans GESTCOM
         ct_col_gestcom = None
         for col in df_gestcom_filtre.columns:
             if col in ['CT_Num', 'ct_num', 'num_ct', 'CT_NUM']:
@@ -85,79 +93,82 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
                 break
         
         if not ct_col_gestcom:
-            st.error("❌ Colonne CT_Num introuvable dans GESTCOM")
+            st.error("❌ CT_Num introuvable dans GESTCOM")
             return None
         
-        # 8. VÉRIFIER JALIXE
+        intitule_col_gestcom = None
+        for col in df_gestcom_filtre.columns:
+            if col in ['CT_Intitule', 'CT_INTITULE', 'ct_intitule']:
+                intitule_col_gestcom = col
+                break
+        
+        if intitule_col_gestcom:
+            df_gestcom_filtre['CLE_UNIQUE'] = (
+                df_gestcom_filtre[ct_col_gestcom].astype(str).str.strip().str.upper() + 
+                '|||' + 
+                df_gestcom_filtre[intitule_col_gestcom].astype(str).str.strip().str.upper()
+            )
+            st.success("✅ Liaison par CT_Num + CT_Intitule")
+        else:
+            df_gestcom_filtre['CLE_UNIQUE'] = df_gestcom_filtre[ct_col_gestcom].astype(str).str.strip().str.upper()
+            st.warning("⚠️ CT_Intitule absent de GESTCOM")
+        
         if 'CptPhase' not in df_jalixe.columns:
-            st.error("❌ Colonne CptPhase introuvable dans JALIXE")
+            st.error("❌ CptPhase introuvable dans JALIXE")
             return None
         
         if 'LibTitre' not in df_jalixe.columns:
-            st.error("❌ Colonne LibTitre introuvable dans JALIXE")
+            st.error("❌ LibTitre introuvable dans JALIXE")
             return None
         
-        # 9. CRITIQUE : DÉDUPLIQUER CptPhase DANS JALIXE
         nb_jalixe_avant = len(df_jalixe)
-        df_jalixe_dedup = df_jalixe.drop_duplicates(subset=['CptPhase'], keep='first')
-        nb_jalixe_apres = len(df_jalixe_dedup)
+        df_jalixe_clean = df_jalixe[['CptPhase', 'LibTitre']].copy()
+        df_jalixe_clean['CptPhase'] = df_jalixe_clean['CptPhase'].astype(str).str.strip()
+        df_jalixe_clean = df_jalixe_clean.drop_duplicates(subset=['CptPhase'], keep='first')
+        nb_jalixe_apres = len(df_jalixe_clean)
         
         if nb_jalixe_avant != nb_jalixe_apres:
-            st.warning(f"⚠️ JALIXE : {nb_jalixe_avant - nb_jalixe_apres} doublons CptPhase supprimés ({nb_jalixe_avant} → {nb_jalixe_apres})")
+            st.info(f"📊 JALIXE : {nb_jalixe_avant - nb_jalixe_apres} doublons supprimés")
         
-        # 10. PRÉPARER JALIXE
-        df_jalixe_mini = df_jalixe_dedup[['CptPhase', 'LibTitre']].copy()
-        df_jalixe_mini['CptPhase'] = df_jalixe_mini['CptPhase'].astype(str).str.strip()
-        df_jalixe_mini['LibTitre'] = df_jalixe_mini['LibTitre'].astype(str).str.strip()
-        
-        # 11. FUSION GESTCOM + JALIXE (sans doublons)
         df_gestcom_jalixe = df_gestcom_filtre.merge(
-            df_jalixe_mini,
+            df_jalixe_clean,
             left_on='Phase_Num',
             right_on='CptPhase',
             how='left'
         )
         
         nb_correspondances = df_gestcom_jalixe['LibTitre'].notna().sum()
-        st.success(f"✅ **{nb_correspondances}** correspondances GESTCOM-JALIXE")
+        st.success(f"✅ {nb_correspondances} correspondances trouvées")
         
-        # 12. AGRÉGATION PAR CT_Num SEULEMENT
         df_gestcom_jalixe['LibTitre'] = df_gestcom_jalixe['LibTitre'].fillna('')
         
-        # Garder seulement les lignes avec des titres
         df_avec_titres = df_gestcom_jalixe[df_gestcom_jalixe['LibTitre'] != ''].copy()
         
         if len(df_avec_titres) > 0:
-            df_titres = df_avec_titres.groupby(ct_col_gestcom)['LibTitre'].apply(
-                lambda x: '; '.join(sorted(set(x)))  # set() pour éviter doublons, sorted() pour ordre
+            df_titres = df_avec_titres.groupby('CLE_UNIQUE')['LibTitre'].apply(
+                lambda x: '; '.join(sorted(set(x)))
             ).reset_index()
-            df_titres.columns = ['CT_Num_temp', 'Titres']
+            df_titres.columns = ['CLE_UNIQUE', 'Titres']
         else:
-            # Aucun titre trouvé
-            df_titres = pd.DataFrame(columns=['CT_Num_temp', 'Titres'])
+            df_titres = pd.DataFrame(columns=['CLE_UNIQUE', 'Titres'])
         
-        # 13. FUSION FINALE : LEFT JOIN pour garder TOUS les clients de l'Annuaire
         df_final = df_annuaire.merge(
             df_titres,
-            left_on=ct_col_annuaire,
-            right_on='CT_Num_temp',
+            on='CLE_UNIQUE',
             how='left'
         )
         
         df_final['Titres'] = df_final['Titres'].fillna('Aucun titre')
         
-        # 14. VÉRIFICATION STRICTE
         nb_final = len(df_final)
-        if nb_final != nb_clients_annuaire:
-            st.error(f"❌ ERREUR : {nb_final} lignes vs {nb_clients_annuaire} clients Annuaire")
-            st.error(f"Différence : {abs(nb_final - nb_clients_annuaire)} lignes")
+        if nb_final != len(df_annuaire):
+            st.error(f"❌ {nb_final} vs {len(df_annuaire)} lignes")
         else:
-            st.success(f"✅ PARFAIT : {nb_final} = {nb_clients_annuaire} clients (écart = 0%)")
+            st.success(f"✅ PARFAIT : {nb_final} lignes (écart = 0%)")
         
-        # 15. COLONNES FINALES
         colonnes_ordre = []
         
-        if intitule_col_annuaire and intitule_col_annuaire in df_final.columns:
+        if intitule_col_annuaire in df_final.columns:
             colonnes_ordre.append(intitule_col_annuaire)
         
         colonnes_ordre.append(ct_col_annuaire)
@@ -173,7 +184,6 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
         
         df_final_export = df_final[colonnes_ordre].copy()
         
-        # Renommer
         rename_dict = {
             intitule_col_annuaire: 'Nom',
             ct_col_annuaire: 'num_CT',
@@ -187,13 +197,10 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
         
         df_final_export = df_final_export.rename(columns={k: v for k, v in rename_dict.items() if k in df_final_export.columns})
         
-        # 16. STATISTIQUES
         nb_avec_titres = len(df_final_export[df_final_export['Titres'] != 'Aucun titre'])
-        nb_sans_titres = len(df_final_export[df_final_export['Titres'] == 'Aucun titre'])
+        st.info(f"📊 {nb_avec_titres} avec titres | {len(df_final_export) - nb_avec_titres} sans titres")
         
-        st.info(f"📊 **{nb_avec_titres}** avec titres | **{nb_sans_titres}** sans titres")
-        
-        return df_final_export, nb_clients_annuaire, nb_final
+        return df_final_export, len(df_annuaire), nb_final
         
     except Exception as e:
         st.error(f"❌ Erreur : {str(e)}")
@@ -201,7 +208,6 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
         st.code(traceback.format_exc())
         return None
 
-# SIDEBAR
 st.sidebar.header("📂 Charger vos fichiers")
 file_annuaire = st.sidebar.file_uploader("1. Annuaire", type=["xlsx", "csv"], key="annuaire")
 file_gestcom = st.sidebar.file_uploader("2. GESTCOM", type=["xlsx", "csv"], key="gestcom")
@@ -234,7 +240,7 @@ if file_jalixe:
 
 if st.sidebar.button("🔄 Générer l'annuaire", type="primary"):
     if file_annuaire and file_gestcom and file_jalixe:
-        with st.spinner("⏳ Traitement en cours..."):
+        with st.spinner("⏳ Traitement..."):
             file_annuaire.seek(0)
             file_gestcom.seek(0)
             file_jalixe.seek(0)
@@ -257,9 +263,7 @@ if st.sidebar.button("🔄 Générer l'annuaire", type="primary"):
                 
                 if ecart_pct == 0:
                     st.balloons()
-                    st.success("🎉 PARFAIT ! Écart = 0.00% - Prêt pour Sandrine !")
-                else:
-                    st.warning(f"⚠️ Écart = {ecart_pct:.2f}%")
+                    st.success("🎉 PARFAIT ! Prêt pour Sandrine !")
                 
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -268,11 +272,11 @@ if st.sidebar.button("🔄 Générer l'annuaire", type="primary"):
                     st.metric("Clients générés", nb_final)
                 with col3:
                     if ecart_pct == 0:
-                        st.metric("Écart", "0.00%", delta="✅ PARFAIT", delta_color="normal")
+                        st.metric("Écart", "0.00%", delta="✅ PARFAIT")
                     elif ecart_pct <= 1:
-                        st.metric("Écart", f"{ecart_pct:.2f}%", delta="✅ OK", delta_color="normal")
+                        st.metric("Écart", f"{ecart_pct:.2f}%", delta="✅ OK")
                     else:
-                        st.metric("Écart", f"{ecart_pct:.2f}%", delta="❌ > 1%", delta_color="inverse")
+                        st.metric("Écart", f"{ecart_pct:.2f}%", delta="❌ > 1%")
     else:
         st.error("⚠️ Chargez les 3 fichiers")
 
@@ -281,7 +285,7 @@ if 'df_final' in st.session_state:
     
     st.markdown("---")
     st.subheader("📊 Annuaire Dynamique")
-    st.caption(f"🕒 Données mises à jour le {st.session_state['date_maj']}")
+    st.caption(f"🕒 Mis à jour : {st.session_state['date_maj']}")
     
     st.markdown("### 🔍 Filtres colonne par colonne")
     
@@ -299,40 +303,32 @@ if 'df_final' in st.session_state:
                 col_name = colonnes[col_idx]
                 with col_ui:
                     if col_name in ['Ville', 'Pays', 'CP']:
-                        valeurs_uniques = ['Tous'] + sorted(df[col_name].dropna().astype(str).unique().tolist())
-                        filtres[col_name] = st.selectbox(
-                            f"🏷️ {col_name}",
-                            valeurs_uniques,
-                            key=f"filter_{col_name}"
-                        )
+                        valeurs = ['Tous'] + sorted(df[col_name].dropna().astype(str).unique().tolist())
+                        filtres[col_name] = st.selectbox(f"🏷️ {col_name}", valeurs, key=f"f_{col_name}")
                     else:
-                        filtres[col_name] = st.text_input(
-                            f"🔎 {col_name}",
-                            "",
-                            key=f"filter_{col_name}"
-                        )
+                        filtres[col_name] = st.text_input(f"🔎 {col_name}", "", key=f"f_{col_name}")
     
     df_filtre = df.copy()
     
-    for col_name, valeur_filtre in filtres.items():
-        if valeur_filtre and valeur_filtre != 'Tous':
+    for col_name, val in filtres.items():
+        if val and val != 'Tous':
             if col_name in ['Ville', 'Pays', 'CP']:
-                df_filtre = df_filtre[df_filtre[col_name].astype(str) == valeur_filtre]
+                df_filtre = df_filtre[df_filtre[col_name].astype(str) == val]
             else:
-                df_filtre = df_filtre[df_filtre[col_name].astype(str).str.contains(valeur_filtre, case=False, na=False)]
+                df_filtre = df_filtre[df_filtre[col_name].astype(str).str.contains(val, case=False, na=False)]
     
     st.markdown("---")
     st.dataframe(df_filtre, use_container_width=True, height=500)
-    st.info(f"📌 {len(df_filtre)} client(s) affiché(s) sur {len(df)} total")
+    st.info(f"📌 {len(df_filtre)} / {len(df)} clients")
     
-    nb_avec_titres = len(df[df['Titres'] != 'Aucun titre'])
-    nb_sans_titres = len(df[df['Titres'] == 'Aucun titre'])
+    nb_avec = len(df[df['Titres'] != 'Aucun titre'])
+    nb_sans = len(df) - nb_avec
     
     col1, col2 = st.columns(2)
     with col1:
-        st.metric("✅ Clients avec titres", nb_avec_titres)
+        st.metric("✅ Avec titres", nb_avec)
     with col2:
-        st.metric("⚠️ Clients sans titres", nb_sans_titres)
+        st.metric("⚠️ Sans titres", nb_sans)
     
     st.markdown("### 📥 Export Excel")
     
@@ -347,7 +343,7 @@ if 'df_final' in st.session_state:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 else:
-    st.info("👆 Chargez vos 3 fichiers Excel dans la barre latérale et cliquez sur 'Générer l'annuaire'")
+    st.info("👆 Chargez vos 3 fichiers Excel et cliquez sur 'Générer l'annuaire'")
 
 st.sidebar.markdown("---")
 st.sidebar.info("✨ Développé par Chaymae Taj 🌸")
