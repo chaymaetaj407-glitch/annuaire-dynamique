@@ -11,7 +11,7 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "openpyxl"])
 
 st.set_page_config(
-    page_title="Annuaire Dynamique - France Routage", 
+    page_title="Annuaire Dynamique - France Routage",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -23,7 +23,7 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
     try:
         nb_clients_annuaire = len(df_annuaire)
         st.info(f"📊 {nb_clients_annuaire} clients dans l'Annuaire")
-        
+
         # 1️⃣ IDENTIFIER CT_Num dans ANNUAIRE
         ct_col_annuaire = next((c for c in df_annuaire.columns if c.lower() in ['ct_num', 'num_ct']), None)
         if not ct_col_annuaire:
@@ -78,16 +78,31 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
 
         st.info(f"📘 JALIXE nettoyé : {len(df_jalixe_clean)} phases uniques")
 
-        # 5️⃣ FUSION GESTCOM + JALIXE (corrigée)
-        df_gestcom_jalixe = df_gestcom_filtre.merge(
+        # 5️⃣ FUSION GESTCOM + JALIXE (version anti-mélange)
+        df_gestcom_filtre['CT_Num_Clean'] = df_gestcom_filtre[ct_col_gestcom].astype(str).str.strip().str.upper()
+
+        # Identifier les phases ambiguës (partagées entre plusieurs CT_Num)
+        phases_clients = df_gestcom_filtre.groupby('Phase_Num')['CT_Num_Clean'].nunique().reset_index()
+        phases_clients_ambigues = phases_clients[phases_clients['CT_Num_Clean'] > 1]['Phase_Num'].tolist()
+
+        st.warning(f"⚠️ {len(phases_clients_ambigues)} phases apparaissent chez plusieurs clients (ignorées pour éviter le mélange)")
+
+        # Garder uniquement les phases uniques par client
+        df_gestcom_uniques = df_gestcom_filtre[~df_gestcom_filtre['Phase_Num'].isin(phases_clients_ambigues)].copy()
+
+        # Fusionner avec JALIXE
+        df_gestcom_jalixe = df_gestcom_uniques.merge(
             df_jalixe_clean,
             left_on='Phase_Num',
             right_on='CptPhase_Clean',
             how='left'
         )
+
+        # Nettoyer et dédupliquer
         df_gestcom_jalixe.drop_duplicates(subset=['CT_Num_Clean', 'Phase_Num'], inplace=True)
+
         nb_correspondances = df_gestcom_jalixe['LibTitre'].notna().sum()
-        st.success(f"✅ {nb_correspondances} correspondances GESTCOM–JALIXE")
+        st.success(f"✅ {nb_correspondances} correspondances GESTCOM–JALIXE valides (sans mélange)")
 
         # 6️⃣ CRÉER LES TITRES PAR CLIENT
         df_avec_titres = df_gestcom_jalixe[df_gestcom_jalixe['LibTitre'].notna()].copy()
@@ -149,6 +164,7 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
         st.code(traceback.format_exc())
         return None
 
+
 # === INTERFACE STREAMLIT ===
 st.sidebar.header("📂 Charger vos fichiers")
 file_annuaire = st.sidebar.file_uploader("1️⃣ Annuaire", type=["xlsx", "csv"], key="annuaire")
@@ -207,4 +223,4 @@ if 'df_final' in st.session_state:
 
 st.sidebar.markdown("---")
 st.sidebar.info("✨ Développé par Chaymae Taj 🌸")
-st.sidebar.caption("📋 Version corrigée — gestion propre des titres (anti-mélange)")
+st.sidebar.caption("📋 Version finale corrigée — anti-mélange des titres ✅")
