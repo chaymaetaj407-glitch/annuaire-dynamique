@@ -14,5 +14,7 @@ jobs:
       - name: Visit Streamlit App
         run: |
           echo "Visiting Streamlit app..."
-          curl -L --max-time 60 https://annuaire-dynamique-thtkbofr8yegmymmvvunwb.streamlit.app/
-          echo "App visited successfully!"
+          curl -I --location --max-time 30 --max-redirs 10 --retry 2 \
+            -H "User-Agent: Mozilla/5.0" \
+            https://annuaire-dynamique-thtkbofr8yegmymmvvunwb.streamlit.app/ || true
+          echo "App visited!"
