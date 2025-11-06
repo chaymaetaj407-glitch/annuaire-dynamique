@@ -1,270 +1,234 @@
-import streamlit as st
-import pandas as pd
-from datetime import datetime
-import io
+import React, { useState, useMemo } from 'react';
+import { Upload, Download, RefreshCw, Search, X, AlertCircle, CheckCircle } from 'lucide-react';
 
-# Installation automatique d'openpyxl si nécessaire
-try:
-    import openpyxl
-except ImportError:
-    import subprocess
-    import sys
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "openpyxl"])
+const AnnuaireDynamique = () => {
+  const [annuaireData, setAnnuaireData] = useState([]);
+  const [gestcomData, setGestcomData] = useState([]);
+  const [jalixeData, setJalixeData] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const [filters, setFilters] = useState({});
+  const [diagnostics, setDiagnostics] = useState(null);
 
-# Configuration de la page
-st.set_page_config(
-    page_title="Annuaire Dynamique - France Routage", 
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+  const parseCSV = (text) => {
+    const lines = text.split('\n').filter(line => line.trim());
+    if (lines.length === 0) return [];
+    
+    const headers = lines[0].split(/[;,]/).map(h => h.trim().replace(/"/g, ''));
+    return lines.slice(1).map(line => {
+      const values = line.split(/[;,]/).map(v => v.trim().replace(/"/g, ''));
+      const obj = {};
+      headers.forEach((header, i) => {
+        obj[header] = values[i] || '';
+      });
+      return obj;
+    });
+  };
 
-# ====== MOT DE PASSE ======
-MOT_DE_PASSE = "FranceRoutage2025"
+  const handleFileUpload = async (e, type) => {
+    const file = e.target.files[0];
+    if (!file) return;
 
-def verifier_mot_de_passe():
-    """Affiche la page de connexion"""
-    
-    if "authentifie" not in st.session_state:
-        st.session_state["authentifie"] = False
-    
-    if not st.session_state["authentifie"]:
-        st.title("🔐 Connexion - Annuaire Dynamique")
-        st.markdown("---")
-        
-        col1, col2, col3 = st.columns([1, 2, 1])
-        
-        with col2:
-            st.markdown("### France Routage")
-            st.write("Veuillez entrer le mot de passe pour accéder à l'application.")
-            
-            mot_de_passe_saisi = st.text_input(
-                "Mot de passe", 
-                type="password",
-                key="password_input"
-            )
-            
-            col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
-            with col_btn2:
-                if st.button("Se connecter", type="primary", use_container_width=True):
-                    if mot_de_passe_saisi == MOT_DE_PASSE:
-                        st.session_state["authentifie"] = True
-                        st.rerun()
-                    else:
-                        st.error("❌ Mot de passe incorrect")
-            
-            st.markdown("---")
-            st.caption("Application développée par Chaymae Taj 🌸")
-        
-        return False
-    
-    return True
+    setLoading(true);
+    const text = await file.text();
+    const data = parseCSV(text);
 
-# Vérifier l'authentification
-if not verifier_mot_de_passe():
-    st.stop()
+    if (type === 'annuaire') setAnnuaireData(data);
+    if (type === 'gestcom') setGestcomData(data);
+    if (type === 'jalixe') setJalixeData(data);
 
-# ====== APPLICATION PRINCIPALE ======
+    setLoading(false);
+    if (annuaireData.length && gestcomData.length && jalixeData.length) {
+      setLastUpdate(new Date());
+    }
+  };
 
-st.title("📘 Annuaire Dynamique - France Routage")
+  const mergedData = useMemo(() => {
+    if (!annuaireData.length || !gestcomData.length || !jalixeData.length) {
+      return [];
+    }
 
-# Bouton de déconnexion
-with st.sidebar:
-    if st.button("🚪 Déconnexion"):
-        st.session_state["authentifie"] = False
-        st.rerun()
-    st.markdown("---")
+    setLastUpdate(new Date());
 
-# Fonction de traitement
-def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
-    try:
-        # 1. Filtrer GESTCOM
-        if 'AR_Ref' in df_gestcom.columns:
-            df_gestcom_filtre = df_gestcom[df_gestcom['AR_Ref'] == 'Note'].copy()
-        elif 'AR_REF' in df_gestcom.columns:
-            df_gestcom_filtre = df_gestcom[df_gestcom['AR_REF'] == 'Note'].copy()
-        else:
-            st.warning("⚠️ Colonne AR_Ref introuvable dans GESTCOM")
-            df_gestcom_filtre = df_gestcom.copy()
-        
-        # 2. Trouver la colonne phase
-        if 'DL_Design' in df_gestcom_filtre.columns:
-            phase_col = 'DL_Design'
-        elif 'DL_DESIGN' in df_gestcom_filtre.columns:
-            phase_col = 'DL_DESIGN'
-        else:
-            st.error("❌ Colonne DL_DESIGN introuvable")
-            return None
-        
-        if 'CptPhase' not in df_jalixe.columns:
-            st.error("❌ Colonne CptPhase introuvable dans JALIXE")
-            return None
-        
-        # 3. Fusion GESTCOM + JALIXE
-        df_gestcom_jalixe = df_gestcom_filtre.merge(
-            df_jalixe[['CptPhase', 'Titre'] if 'Titre' in df_jalixe.columns else ['CptPhase']],
-            left_on=phase_col,
-            right_on='CptPhase',
-            how='left'
-        )
-        
-        if 'Titre' in df_gestcom_jalixe.columns:
-            df_gestcom_jalixe['Titre'] = df_gestcom_jalixe['Titre'].fillna('Aucun titre')
-        else:
-            df_gestcom_jalixe['Titre'] = 'Aucun titre'
-        
-        # 4. Trouver num_CT
-        ct_col_annuaire = None
-        ct_col_gestcom = None
-        
-        for col in df_annuaire.columns:
-            if 'num_ct' in col.lower() or 'ct_num' in col.lower():
-                ct_col_annuaire = col
-                break
-        
-        for col in df_gestcom_jalixe.columns:
-            if 'num_ct' in col.lower() or 'ct_num' in col.lower():
-                ct_col_gestcom = col
-                break
-        
-        if not ct_col_annuaire or not ct_col_gestcom:
-            st.error(f"❌ Colonne num_CT introuvable")
-            return None
-        
-        # 5. Agréger les titres
-        df_titres = df_gestcom_jalixe.groupby(ct_col_gestcom)['Titre'].apply(
-            lambda x: '; '.join(x.unique())
-        ).reset_index()
-        df_titres.columns = [ct_col_gestcom, 'Liste_Titres']
-        
-        # 6. Fusion finale
-        df_final = df_annuaire.merge(
-            df_titres,
-            left_on=ct_col_annuaire,
-            right_on=ct_col_gestcom,
-            how='left'
-        )
-        
-        df_final['Liste_Titres'] = df_final['Liste_Titres'].fillna('Aucun titre')
-        df_final = df_final.drop_duplicates(subset=[ct_col_annuaire])
-        
-        # 7. Sélectionner les colonnes
-        colonnes = []
-        
-        for col in df_final.columns:
-            if 'nom' in col.lower() and 'client' in col.lower():
-                colonnes.append(col)
-                break
-        
-        colonnes.append(ct_col_annuaire)
-        
-        for col in df_final.columns:
-            if any(k in col.lower() for k in ['adresse', 'cp', 'ville', 'pays', 'telephone', 'tel']):
-                colonnes.append(col)
-        
-        for col in df_final.columns:
-            if 'email' in col.lower() or 'mail' in col.lower():
-                colonnes.append(col)
-                break
-        
-        colonnes.append('Liste_Titres')
-        colonnes = [c for c in colonnes if c in df_final.columns]
-        
-        return df_final[colonnes], len(df_annuaire), len(df_final)
-        
-    except Exception as e:
-        st.error(f"❌ Erreur : {str(e)}")
-        return None
+    const gestcomWithNote = gestcomData.filter(g => 
+      g.DL_Design && (g.DL_Design.includes('{note}') || g.DL_Design.includes('note'))
+    );
 
-# Interface de chargement
-st.sidebar.header("📂 Charger vos fichiers Excel")
-file_annuaire = st.sidebar.file_uploader("1. Fichier Annuaire", type=["xlsx"], key="annuaire")
-file_gestcom = st.sidebar.file_uploader("2. Fichier GESTCOM", type=["xlsx"], key="gestcom")
-file_jalixe = st.sidebar.file_uploader("3. Fichier JALIXE", type=["xlsx"], key="jalixe")
+    const phaseNumbers = gestcomWithNote.map(g => {
+      const match = g.DL_Design.match(/\d{8,}/);
+      return match ? match[0] : null;
+    }).filter(Boolean);
 
-# Bouton Générer
-if st.sidebar.button("🔄 Générer l'annuaire", type="primary"):
-    if file_annuaire and file_gestcom and file_jalixe:
-        with st.spinner("⏳ Traitement en cours..."):
-            df_annuaire = pd.read_excel(file_annuaire)
-            df_gestcom = pd.read_excel(file_gestcom)
-            df_jalixe = pd.read_excel(file_jalixe)
-            
-            st.info(f"📊 Annuaire: {len(df_annuaire)} | GESTCOM: {len(df_gestcom)} | JALIXE: {len(df_jalixe)}")
-            
-            resultat = traiter_donnees(df_annuaire, df_gestcom, df_jalixe)
-            
-            if resultat:
-                df_final, nb_annuaire, nb_final = resultat
-                
-                st.session_state['df_final'] = df_final
-                st.session_state['date_maj'] = datetime.now().strftime("%d/%m/%Y %H:%M")
-                st.session_state['nb_annuaire'] = nb_annuaire
-                st.session_state['nb_final'] = nb_final
-                
-                ecart = abs(nb_final - nb_annuaire) / nb_annuaire * 100
-                
-                st.success("✅ Annuaire généré !")
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Clients Annuaire", nb_annuaire)
-                with col2:
-                    st.metric("Clients générés", nb_final)
-                with col3:
-                    st.metric("Écart", f"{ecart:.2f}%")
-    else:
-        st.error("⚠️ Chargez les 3 fichiers")
+    const jalixePhases = jalixeData.map(j => j.CptPhase).filter(Boolean);
+    const matches = phaseNumbers.filter(p => jalixePhases.includes(p));
 
-# Affichage des résultats
-if 'df_final' in st.session_state:
-    df = st.session_state['df_final']
+    setDiagnostics({
+      totalGestcom: gestcomData.length,
+      gestcomWithNote: gestcomWithNote.length,
+      phaseNumbers: phaseNumbers.length,
+      jalixePhases: jalixePhases.length,
+      matchesFound: matches.length
+    });
+
+    const titresByClient = {};
+
+    gestcomWithNote.forEach(gRow => {
+      const ctNum = gRow.CT_Num;
+      if (!ctNum) return;
+
+      const match = gRow.DL_Design.match(/\d{8,}/);
+      if (!match) return;
+
+      const phaseNum = match[0];
+      const jalixeRow = jalixeData.find(j => j.CptPhase === phaseNum);
+      
+      if (jalixeRow && jalixeRow.Titre) {
+        if (!titresByClient[ctNum]) {
+          titresByClient[ctNum] = [];
+        }
+        if (!titresByClient[ctNum].includes(jalixeRow.Titre)) {
+          titresByClient[ctNum].push(jalixeRow.Titre);
+        }
+      }
+    });
+
+    const uniqueClients = {};
     
-    st.markdown("---")
-    st.subheader("📊 Annuaire Dynamique")
-    st.caption(f"🕒 Mis à jour le {st.session_state['date_maj']}")
-    
-    st.markdown("### 🔍 Filtres")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        filtre_texte = st.text_input("🔎 Rechercher", "")
-    
-    with col2:
-        ville_col = None
-        for col in df.columns:
-            if 'ville' in col.lower():
-                ville_col = col
-                break
+    annuaireData.forEach(client => {
+      const ctNum = client.CT_Num;
+      if (!ctNum || uniqueClients[ctNum]) return;
+
+      const titres = titresByClient[ctNum] || [];
+      
+      uniqueClients[ctNum] = {
+        CT_Num: ctNum,
+        Nom: client.CT_Intitule || '',
+        Adresse: client.CT_Adresse || '',
+        CP: client.CT_CodePostal || '',
+        Ville: client.CT_Ville || '',
+        Pays: client.CT_Pays || '',
+        Telephone: client.CT_Telephone || '',
+        Email: client.CT_Email || '',
+        Titres: titres.length > 0 ? titres.join('; ') : 'Aucun titre'
+      };
+    });
+
+    return Object.values(uniqueClients);
+  }, [annuaireData, gestcomData, jalixeData]);
+
+  const filteredData = useMemo(() => {
+    return mergedData.filter(row => {
+      return Object.entries(filters).every(([key, value]) => {
+        if (!value) return true;
+        const cellValue = String(row[key] || '').toLowerCase();
+        return cellValue.includes(value.toLowerCase());
+      });
+    });
+  }, [mergedData, filters]);
+
+  const handleFilterChange = (column, value) => {
+    setFilters(prev => ({...prev, [column]: value}));
+  };
+
+  const clearFilter = (column) => {
+    setFilters(prev => {
+      const newFilters = { ...prev };
+      delete newFilters[column];
+      return newFilters;
+    });
+  };
+
+  const exportToExcel = () => {
+    const headers = ['Nom', 'CT_Num', 'Adresse', 'CP', 'Ville', 'Pays', 'Telephone', 'Email', 'Titres'];
+    const csvContent = [
+      headers.join(';'),
+      ...filteredData.map(row => headers.map(h => `"${row[h] || '"}"`).join(';'))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `annuaire_export_${new Date().toISOString().slice(0,10)}.csv`;
+    link.click();
+  };
+
+  const columns = ['Nom', 'CT_Num', 'Adresse', 'CP', 'Ville', 'Pays', 'Telephone', 'Email', 'Titres'];
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
+      <div className="max-w-7xl mx-auto">
+        <div className="bg-white rounded-lg shadow-xl p-6 mb-6">
+          <div className="flex justify-between items-center mb-6">
+            <h1 className="text-3xl font-bold text-gray-800">📊 Annuaire Dynamique</h1>
+            <p className="text-sm text-pink-600 font-medium">Développé par Chaymae Taj 🌸</p>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            {['annuaire', 'gestcom', 'jalixe'].map(type => (
+              <div key={type} className="border-2 border-dashed border-blue-300 rounded-lg p-4">
+                <label className="flex flex-col items-center cursor-pointer">
+                  <Upload className="w-8 h-8 text-blue-500 mb-2" />
+                  <span className="text-sm font-medium">{type.toUpperCase()}.csv</span>
+                  <input type="file" accept=".csv" className="hidden" onChange={(e) => handleFileUpload(e, type)} />
+                </label>
+              </div>
+            ))}
+          </div>
+
+          {diagnostics && (
+            <div className="bg-blue-50 p-4 rounded mb-4">
+              <h3 className="font-bold mb-2">🔍 Diagnostic</h3>
+              <div className="text-sm">
+                <div>GESTCOM avec note: {diagnostics.gestcomWithNote}</div>
+                <div>Correspondances: {diagnostics.matchesFound}</div>
+              </div>
+            </div>
+          )}
+
+          {mergedData.length > 0 && (
+            <div className="flex justify-between mb-4">
+              <span>{filteredData.length} clients</span>
+              <button onClick={exportToExcel} className="px-4 py-2 bg-green-600 text-white rounded">
+                <Download className="inline w-4 h-4 mr-2" />Exporter
+              </button>
+            </div>
+          )}
+        </div>
+
+        {mergedData.length > 0 && (
+          <div className="bg-white rounded-lg shadow-xl overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-blue-600 text-white">
+                <tr>{columns.map(col => <th key={col} className="px-4 py-3 text-left">{col}</th>)}</tr>
+                <tr className="bg-blue-50">
+                  {columns.map(col => (
+                    <th key={col} className="px-4 py-2">
+                      <input type="text" placeholder="Filtrer..." value={filters[col] || ''} 
+                        onChange={(e) => handleFilterChange(col, e.target.value)}
+                        className="w-full px-2 py-1 border rounded text-sm" />
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filteredData.map((row, idx) => (
+                  <tr key={idx} className="hover:bg-blue-50">
+                    {columns.map(col => (
+                      <td key={col} className="px-4 py-3 text-sm">{row[col]}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
         
-        if ville_col:
-            villes = ['Toutes'] + sorted(df[ville_col].dropna().unique().tolist())
-            filtre_ville = st.selectbox("🏙️ Ville", villes)
-    
-    df_filtre = df.copy()
-    
-    if filtre_texte:
-        mask = df_filtre.astype(str).apply(lambda x: x.str.contains(filtre_texte, case=False, na=False)).any(axis=1)
-        df_filtre = df_filtre[mask]
-    
-    if ville_col and filtre_ville != 'Toutes':
-        df_filtre = df_filtre[df_filtre[ville_col] == filtre_ville]
-    
-    st.dataframe(df_filtre, use_container_width=True, height=500)
-    st.info(f"📌 {len(df_filtre)} client(s) sur {len(df)}")
-    
-    st.markdown("### 📥 Export")
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        df_filtre.to_excel(writer, index=False, sheet_name='Annuaire')
-    
-    st.download_button(
-        label="📥 Exporter en Excel",
-        data=buffer.getvalue(),
-        file_name=f"annuaire_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-else:
-    st.info("👆 Chargez vos 3 fichiers et cliquez sur 'Générer l'annuaire'")
+        <div className="text-center mt-6 text-gray-500 text-sm">
+          © 2025 - Développé par Chaymae Taj 🌸
+        </div>
+      </div>
+    </div>
+  );
+};
 
-st.sidebar.markdown("---")
-st.sidebar.info("Développé par Chaymae Taj 🌸")
+export default AnnuaireDynamique;
