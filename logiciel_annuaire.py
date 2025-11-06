@@ -20,10 +20,12 @@ st.set_page_config(
 
 st.title("📘 Annuaire Dynamique - France Routage")
 
-# Fonction pour traiter les données selon le cahier des charges
+# Fonction optimisée pour traiter les données
+@st.cache_data
 def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
     """
     Traite et fusionne les 3 bases de données selon les règles métier
+    VERSION OPTIMISÉE POUR RAPIDITÉ
     """
     try:
         # 1. FILTRE STRICT : AR_Ref = "NOTE"
@@ -35,144 +37,95 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
             st.error("❌ Colonne AR_Ref introuvable dans GESTCOM")
             return None
         
-        st.info(f"🔍 Lignes GESTCOM avec AR_Ref='NOTE': **{len(df_gestcom_filtre)}** sur {len(df_gestcom)}")
+        nb_notes = len(df_gestcom_filtre)
+        st.info(f"🔍 **{nb_notes}** lignes avec AR_Ref='NOTE' sur {len(df_gestcom)}")
         
-        if len(df_gestcom_filtre) == 0:
-            st.warning("⚠️ Aucune ligne avec AR_Ref='NOTE' trouvée dans GESTCOM")
+        if nb_notes == 0:
+            st.warning("⚠️ Aucune ligne avec AR_Ref='NOTE'")
             return None
         
-        # 2. IDENTIFIER LA COLONNE DL_DESIGN
+        # 2. IDENTIFIER COLONNES
         if 'DL_Design' in df_gestcom_filtre.columns:
             phase_col = 'DL_Design'
         elif 'DL_DESIGN' in df_gestcom_filtre.columns:
             phase_col = 'DL_DESIGN'
         else:
-            st.error("❌ Colonne DL_DESIGN introuvable dans GESTCOM")
+            st.error("❌ Colonne DL_DESIGN introuvable")
             return None
         
-        # 3. EXTRAIRE LE NUMÉRO DE PHASE de DL_DESIGN (enlever {note})
-        df_gestcom_filtre['Phase_Num'] = df_gestcom_filtre[phase_col].astype(str).str.replace('{note}', '', case=False).str.strip()
-        
-        # Afficher quelques exemples
-        exemples_phases = df_gestcom_filtre['Phase_Num'].head(10).tolist()
-        st.info(f"📊 Exemples de phases extraites: {exemples_phases}")
-        
-        # 4. LIAISON GESTCOM ↔ JALIXE
-        if 'CptPhase' in df_jalixe.columns:
-            jalixe_phase_col = 'CptPhase'
-        else:
+        if 'CptPhase' not in df_jalixe.columns:
             st.error("❌ Colonne CptPhase introuvable dans JALIXE")
             return None
         
-        # Convertir CptPhase en string pour la fusion
-        df_jalixe = df_jalixe.copy()
-        df_jalixe[jalixe_phase_col] = df_jalixe[jalixe_phase_col].astype(str).str.strip()
+        if 'LibTitre' not in df_jalixe.columns:
+            st.error("❌ Colonne LibTitre introuvable dans JALIXE")
+            return None
         
-        # Afficher quelques CptPhase
-        exemples_jalixe = df_jalixe[jalixe_phase_col].head(10).tolist()
-        st.info(f"📊 Exemples CptPhase JALIXE: {exemples_jalixe}")
+        # 3. OPTIMISATION : Extraire uniquement les colonnes nécessaires
+        df_jalixe_mini = df_jalixe[['CptPhase', 'LibTitre']].copy()
+        df_jalixe_mini['CptPhase'] = df_jalixe_mini['CptPhase'].astype(str).str.strip()
         
-        # Fusion GESTCOM + JALIXE
-        df_gestcom_jalixe = df_gestcom_filtre.merge(
-            df_jalixe[[jalixe_phase_col, 'Titre']],
-            left_on='Phase_Num',
-            right_on=jalixe_phase_col,
-            how='left'
-        )
+        # 4. EXTRAIRE NUMÉRO DE PHASE (enlever {note})
+        df_gestcom_filtre['Phase_Num'] = df_gestcom_filtre[phase_col].astype(str).str.replace('{note}', '', case=False).str.replace('{NOTE}', '', case=False).str.strip()
         
-        correspondances = len(df_gestcom_jalixe[df_gestcom_jalixe['Titre'].notna()])
-        st.success(f"✅ Correspondances GESTCOM-JALIXE trouvées: **{correspondances}** sur {len(df_gestcom_jalixe)}")
-        
-        # Remplacer les titres manquants
-        df_gestcom_jalixe['Titre'] = df_gestcom_jalixe['Titre'].fillna('Aucun titre')
-        
-        # 5. IDENTIFIER LA CLÉ num_CT
-        ct_col_annuaire = None
+        # 5. IDENTIFIER CT_Num
         ct_col_gestcom = None
-        
-        for col in df_annuaire.columns:
-            if 'CT_Num' == col or 'ct_num' == col.lower() or 'num_ct' == col.lower():
-                ct_col_annuaire = col
-                break
-        
-        for col in df_gestcom_jalixe.columns:
-            if 'CT_Num' == col or 'ct_num' == col.lower() or 'num_ct' == col.lower():
+        for col in df_gestcom_filtre.columns:
+            if col in ['CT_Num', 'ct_num', 'num_ct', 'CT_NUM']:
                 ct_col_gestcom = col
                 break
         
-        if not ct_col_annuaire:
-            st.error(f"❌ Colonne num_CT introuvable dans Annuaire. Colonnes disponibles: {df_annuaire.columns.tolist()}")
-            return None
         if not ct_col_gestcom:
-            st.error(f"❌ Colonne num_CT introuvable dans GESTCOM. Colonnes disponibles: {df_gestcom_jalixe.columns.tolist()}")
+            st.error("❌ Colonne CT_Num introuvable dans GESTCOM")
             return None
         
-        st.info(f"🔗 Clé Annuaire: **{ct_col_annuaire}** | Clé GESTCOM: **{ct_col_gestcom}**")
+        ct_col_annuaire = None
+        for col in df_annuaire.columns:
+            if col in ['CT_Num', 'ct_num', 'num_ct', 'CT_NUM']:
+                ct_col_annuaire = col
+                break
         
-        # 6. AGRÉGATION : Concaténer les titres par num_CT
-        df_titres_agreg = df_gestcom_jalixe.groupby(ct_col_gestcom)['Titre'].apply(
-            lambda x: '; '.join([str(t) for t in x.unique() if str(t) != 'Aucun titre'])
-        ).reset_index()
-        df_titres_agreg.columns = [ct_col_gestcom, 'Liste_Titres']
-        df_titres_agreg['Liste_Titres'] = df_titres_agreg['Liste_Titres'].replace('', 'Aucun titre')
+        if not ct_col_annuaire:
+            st.error("❌ Colonne CT_Num introuvable dans Annuaire")
+            return None
         
-        # 7. FUSION FINALE : Annuaire + Titres
-        df_final = df_annuaire.merge(
-            df_titres_agreg,
-            left_on=ct_col_annuaire,
-            right_on=ct_col_gestcom,
+        # 6. FUSION OPTIMISÉE GESTCOM + JALIXE
+        df_gestcom_jalixe = df_gestcom_filtre.merge(
+            df_jalixe_mini,
+            left_on='Phase_Num',
+            right_on='CptPhase',
             how='left'
         )
         
-        df_final['Liste_Titres'] = df_final['Liste_Titres'].fillna('Aucun titre')
+        nb_correspondances = df_gestcom_jalixe['LibTitre'].notna().sum()
+        st.success(f"✅ **{nb_correspondances}** correspondances GESTCOM-JALIXE trouvées")
         
-        # 8. DÉDUPLIQUER
+        # 7. AGRÉGATION RAPIDE : Concaténer titres par CT_Num
+        df_gestcom_jalixe['LibTitre'] = df_gestcom_jalixe['LibTitre'].fillna('')
+        
+        df_titres = df_gestcom_jalixe[df_gestcom_jalixe['LibTitre'] != ''].groupby(ct_col_gestcom)['LibTitre'].apply(
+            lambda x: '; '.join(x.unique())
+        ).reset_index()
+        df_titres.columns = ['CT_Num_temp', 'Titres']
+        
+        # 8. FUSION FINALE OPTIMISÉE
+        df_final = df_annuaire.merge(
+            df_titres,
+            left_on=ct_col_annuaire,
+            right_on='CT_Num_temp',
+            how='left'
+        )
+        
+        df_final['Titres'] = df_final['Titres'].fillna('Aucun titre')
+        
+        # 9. DÉDUPLIQUER
         df_final = df_final.drop_duplicates(subset=[ct_col_annuaire])
         
-        # 9. COLONNES FINALES DANS L'ORDRE
-        colonnes_affichage = []
+        # 10. COLONNES FINALES
+        colonnes_finales = []
         
-        # Nom (CT_Intitule)
-        if 'CT_Intitule' in df_final.columns:
-            colonnes_affichage.append('CT_Intitule')
-        
-        # CT_Num
-        colonnes_affichage.append(ct_col_annuaire)
-        
-        # Adresse
-        if 'CT_Adresse' in df_final.columns:
-            colonnes_affichage.append('CT_Adresse')
-        
-        # Code Postal
-        if 'CT_CodePostal' in df_final.columns:
-            colonnes_affichage.append('CT_CodePostal')
-        
-        # Ville
-        if 'CT_Ville' in df_final.columns:
-            colonnes_affichage.append('CT_Ville')
-        
-        # Pays
-        if 'CT_Pays' in df_final.columns:
-            colonnes_affichage.append('CT_Pays')
-        
-        # Téléphone
-        if 'CT_Telephone' in df_final.columns:
-            colonnes_affichage.append('CT_Telephone')
-        
-        # Email
-        if 'CT_Email' in df_final.columns:
-            colonnes_affichage.append('CT_Email')
-        
-        # Liste Titres
-        colonnes_affichage.append('Liste_Titres')
-        
-        # Filtrer colonnes existantes
-        colonnes_affichage = [col for col in colonnes_affichage if col in df_final.columns]
-        
-        df_final_affichage = df_final[colonnes_affichage].copy()
-        
-        # Renommer pour clarté
-        df_final_affichage = df_final_affichage.rename(columns={
+        # Sélectionner colonnes dans l'ordre
+        mapping_colonnes = {
             'CT_Intitule': 'Nom Client',
             ct_col_annuaire: 'num_CT',
             'CT_Adresse': 'Adresse',
@@ -181,13 +134,23 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
             'CT_Pays': 'Pays',
             'CT_Telephone': 'Téléphone',
             'CT_Email': 'Email',
-            'Liste_Titres': 'Titres'
-        })
+            'Titres': 'Titres'
+        }
         
-        return df_final_affichage, len(df_annuaire), len(df_final_affichage)
+        for col_orig, col_new in mapping_colonnes.items():
+            if col_orig in df_final.columns:
+                colonnes_finales.append(col_orig)
+        
+        df_final_export = df_final[colonnes_finales].copy()
+        
+        # Renommer
+        rename_dict = {k: v for k, v in mapping_colonnes.items() if k in colonnes_finales}
+        df_final_export = df_final_export.rename(columns=rename_dict)
+        
+        return df_final_export, len(df_annuaire), len(df_final_export)
         
     except Exception as e:
-        st.error(f"❌ Erreur lors du traitement : {str(e)}")
+        st.error(f"❌ Erreur : {str(e)}")
         import traceback
         st.code(traceback.format_exc())
         return None
@@ -198,33 +161,42 @@ file_annuaire = st.sidebar.file_uploader("1. Annuaire", type=["xlsx", "csv"], ke
 file_gestcom = st.sidebar.file_uploader("2. GESTCOM", type=["xlsx", "csv"], key="gestcom")
 file_jalixe = st.sidebar.file_uploader("3. JALIXE", type=["xlsx", "csv"], key="jalixe")
 
-def lire_fichier(file):
-    if file.name.endswith('.csv'):
-        return pd.read_csv(file, sep=';', encoding='latin1')
+@st.cache_data
+def lire_fichier(file_bytes, file_name):
+    if file_name.endswith('.csv'):
+        return pd.read_csv(io.BytesIO(file_bytes), sep=';', encoding='latin1', low_memory=False)
     else:
-        return pd.read_excel(file)
+        return pd.read_excel(io.BytesIO(file_bytes))
 
 if file_annuaire:
-    df_test = lire_fichier(file_annuaire)
+    file_bytes = file_annuaire.read()
+    df_test = lire_fichier(file_bytes, file_annuaire.name)
     with st.sidebar.expander("🔍 Colonnes Annuaire"):
         st.write(list(df_test.columns))
 
 if file_gestcom:
-    df_test = lire_fichier(file_gestcom)
+    file_bytes = file_gestcom.read()
+    df_test = lire_fichier(file_bytes, file_gestcom.name)
     with st.sidebar.expander("🔍 Colonnes GESTCOM"):
         st.write(list(df_test.columns))
 
 if file_jalixe:
-    df_test = lire_fichier(file_jalixe)
+    file_bytes = file_jalixe.read()
+    df_test = lire_fichier(file_bytes, file_jalixe.name)
     with st.sidebar.expander("🔍 Colonnes JALIXE"):
         st.write(list(df_test.columns))
 
 if st.sidebar.button("🔄 Générer l'annuaire", type="primary"):
     if file_annuaire and file_gestcom and file_jalixe:
-        with st.spinner("⏳ Traitement..."):
-            df_annuaire = lire_fichier(file_annuaire)
-            df_gestcom = lire_fichier(file_gestcom)
-            df_jalixe = lire_fichier(file_jalixe)
+        with st.spinner("⏳ Traitement en cours..."):
+            # Reset pour relire les fichiers
+            file_annuaire.seek(0)
+            file_gestcom.seek(0)
+            file_jalixe.seek(0)
+            
+            df_annuaire = lire_fichier(file_annuaire.read(), file_annuaire.name)
+            df_gestcom = lire_fichier(file_gestcom.read(), file_gestcom.name)
+            df_jalixe = lire_fichier(file_jalixe.read(), file_jalixe.name)
             
             st.info(f"📊 Annuaire: {len(df_annuaire)} | GESTCOM: {len(df_gestcom)} | JALIXE: {len(df_jalixe)}")
             
@@ -240,7 +212,7 @@ if st.sidebar.button("🔄 Générer l'annuaire", type="primary"):
                 
                 ecart_pct = abs(nb_final - nb_annuaire) / nb_annuaire * 100
                 
-                st.success("✅ Annuaire généré !")
+                st.success("✅ Annuaire généré avec succès !")
                 
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -251,7 +223,7 @@ if st.sidebar.button("🔄 Générer l'annuaire", type="primary"):
                     if ecart_pct <= 1:
                         st.metric("Écart", f"{ecart_pct:.2f}%", delta="✅ OK")
                     else:
-                        st.metric("Écart", f"{ecart_pct:.2f}%", delta="⚠️ > 1%")
+                        st.metric("Écart", f"{ecart_pct:.2f}%", delta="⚠️")
     else:
         st.error("⚠️ Chargez les 3 fichiers")
 
@@ -273,6 +245,8 @@ if 'df_final' in st.session_state:
         if 'Ville' in df.columns:
             villes = ['Toutes'] + sorted(df['Ville'].dropna().unique().tolist())
             filtre_ville = st.selectbox("🏙️ Ville", villes)
+        else:
+            filtre_ville = 'Toutes'
     
     df_filtre = df.copy()
     
@@ -287,6 +261,16 @@ if 'df_final' in st.session_state:
     
     st.info(f"📌 {len(df_filtre)} client(s) / {len(df)} total")
     
+    # STATISTIQUES RAPIDES
+    nb_avec_titres = len(df[df['Titres'] != 'Aucun titre'])
+    nb_sans_titres = len(df[df['Titres'] == 'Aucun titre'])
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("✅ Clients avec titres", nb_avec_titres)
+    with col2:
+        st.metric("⚠️ Clients sans titres", nb_sans_titres)
+    
     st.markdown("### 📥 Export")
     
     buffer = io.BytesIO()
@@ -294,14 +278,14 @@ if 'df_final' in st.session_state:
         df_filtre.to_excel(writer, index=False, sheet_name='Annuaire')
     
     st.download_button(
-        label="📥 Exporter Excel",
+        label="📥 Exporter en Excel",
         data=buffer.getvalue(),
         file_name=f"annuaire_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 else:
-    st.info("👆 Chargez vos 3 fichiers et cliquez sur 'Générer l'annuaire'")
+    st.info("👆 Chargez vos 3 fichiers Excel et cliquez sur 'Générer l'annuaire'")
 
 st.sidebar.markdown("---")
-st.sidebar.info("Développé par Chaymae Taj 🌸")
-st.sidebar.caption("Cahier des charges Sandrine")
+st.sidebar.info("✨ Développé par Chaymae Taj 🌸")
+st.sidebar.caption("📋 Cahier des charges Sandrine")
