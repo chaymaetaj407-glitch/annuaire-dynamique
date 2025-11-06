@@ -1,0 +1,18 @@
+name: Keep Streamlit App Alive
+
+on:
+  schedule:
+    # Exécute toutes les 12 heures (à 6h et 18h UTC)
+    - cron: '0 6,18 * * *'
+  workflow_dispatch: # Permet de lancer manuellement
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Visit Streamlit App
+        run: |
+          echo "Visiting Streamlit app..."
+          curl -L --max-time 60 https://annuaire-dynamique-thtkbofr8yegmymmvvunwb.streamlit.app/
+          echo "App visited successfully!"
