@@ -64,12 +64,14 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
             how='left'
         )
 
-        # --- Concaténation des titres par client ---
+        # --- Concaténation des titres par client (corrigée) ---
         df_final_grouped = (
             df_final.groupby('CT_Num_Clean', as_index=False)
             .agg({
                 ct_col_annuaire: 'first',
-                'LibTitre': lambda x: '; '.join(sorted(set([t for t in x if t]))),
+                'LibTitre': lambda x: '; '.join(
+                    sorted(set([str(t).strip() for t in x if pd.notna(t) and str(t).strip() != '']))
+                ),
                 **{
                     col: 'first'
                     for col in df_annuaire.columns
@@ -93,7 +95,7 @@ def traiter_donnees(df_annuaire, df_gestcom, df_jalixe):
         colonnes_finales = [c for c in colonnes_finales if c in df_final_grouped.columns]
         df_final_grouped = df_final_grouped[colonnes_finales]
 
-        # --- Contrôle nombre clients distincts ---
+        # --- Contrôle du nombre de clients distincts ---
         nb_clients_annuaire = df_annuaire['CT_Num_Clean'].nunique()
         nb_clients_final = df_final_grouped['CT_Num_Clean'].nunique()
         ecart = abs(nb_clients_annuaire - nb_clients_final) / nb_clients_annuaire * 100
